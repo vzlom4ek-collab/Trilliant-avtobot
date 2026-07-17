@@ -88,14 +88,13 @@ async def cancel_job(client, message):
                 break
                 
     if not canceled:
-        await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon bajarilgan.")
+        await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon vaqti kelib bajarilgan.")
 
 # 3. Guruhdan yangi buyurtmalarni qabul qilish
 @app.on_message(filters.chat(GROUP_ID) & filters.text)
 async def handle_group_message(client, message):
     text = message.text.strip()
     
-    # Agar buyruq bo'lsa, uni chetlab o'tamiz
     if text.startswith("/"):
         return
         
@@ -106,17 +105,14 @@ async def handle_group_message(client, message):
         try:
             time_raw = time_match.group(0)
             
-            # Xabarni qismlarga ajratamiz (Shaxsiy matn bormi tekshirish uchun)
             custom_text = None
             if "|" in text:
                 parts = text.split("|")
-                # parts[0] — raqam va vaqt, parts[1] — shaxsiy xabar matni
                 custom_text = parts[1].strip()
                 phone_and_time = parts[0]
             else:
                 phone_and_time = text
                 
-            # Raqam qismini tozalash
             phone_raw = phone_and_time.replace(time_raw, "").strip()
             phone = "".join(c for c in phone_raw if c.isdigit() or c == "+")
             if not phone.startswith("+"):
@@ -153,7 +149,7 @@ async def handle_group_message(client, message):
                 f"📊 **Status:** `{status_text}`"
             )
             if custom_text:
-                reply_text += f"\n✉️ **Shaxsiy xabar:** `{custom_text}`"
+                reply_text += f"\n✉️ **Shaxsiy xabar yuboriladi:** `{custom_text}`"
                 
             await message.reply(reply_text)
             
@@ -175,7 +171,7 @@ async def handle_location(client, message):
         await app.send_message(GROUP_ID, info_text, reply_to_message_id=orig_msg_id)
         await app.send_location(GROUP_ID, lat, lon, reply_to_message_id=orig_msg_id)
         
-        await message.reply("Rahmat! Uyingiz lokatsiyasi qabul qilindi. 📍")
+        await message.reply("Rahmat! Lokatsiyangiz qabul qilindi. 📍")
         del active_clients[user_id]
 
 # Har 5 soniyada vaqtni tekshirib turuvchi va eslatma beruvchi asosiy loop
@@ -201,22 +197,26 @@ async def scheduler_loop():
                         user = contact.users[0]
                         user_id = user.id
                         
-                        # Xabar matnini aniqlash (shaxsiy yoki standart)
+                        # Agar shaxsiy yozuv bo'lsa shuni, bo'lmasa tayyor rasmiy tabrikni yuboramiz
                         if custom_text:
                             text = custom_text
                         else:
-                            text = "Assalomu alaykum! Iltimos, uyingizning lokatsiyasini (geolokatsiya) yuboring."
+                            text = (
+                                "Assalomu alaykum! 🌟\n\n"
+                                "**\"To'yxonchi\" Jamoasining Trilliant Creative Studio (VIDEO)** xizmati tomonidan aloqaga chiqmoqdamiz!\n\n"
+                                "Sizni va oilangizni bo'lajak nikoh to'yingiz munosabati bilan chin qalbimizdan muborakbod etamiz! Baxtingizga ko'z tegmasin, xonadoningizdan shodlik va quvonch arimasin! 🥂🎉\n\n"
+                                "Ertangi to'y tantanasi rejalashtirilgan **joylashuv manzilini (geolokatsiyasini)** ushbu chatga yuborishingizni so'raymiz. Bu bizning jamoamiz o'z vaqtida yetib borishi va eng go'zal lahzalarni yuqori sifatda tasvirga olishi uchun juda muhimdir. 🎬📍"
+                            )
                             
                         await app.send_message(user_id, text)
                         
-                        # Lokatsiya kutish ro'yxatiga qo'shamiz (yuborilgan vaqti bilan)
                         active_clients[user_id] = {
                             "phone": phone,
                             "msg_id": msg_id,
                             "sent_time": now_uz,
                             "reminded": False
                         }
-                        await app.send_message(GROUP_ID, f"✉️ **Xabar yuborildi.** Lokatsiya kutilmoqda...", reply_to_message_id=msg_id)
+                        await app.send_message(GROUP_ID, f"✉️ **Tabrik va taklif xabari yuborildi.** Lokatsiya kutilmoqda...", reply_to_message_id=msg_id)
                     else:
                         await app.send_message(GROUP_ID, f"❌ **Xatolik:** {phone} raqamida Telegram topilmadi.", reply_to_message_id=msg_id)
                 except Exception as e:
@@ -226,22 +226,23 @@ async def scheduler_loop():
                 
         # 2. Avtomatik eslatma tizimi (Mijoz yozgandan keyin 10 daqiqa o'tsa eslatish)
         for user_id, info in list(active_clients.items()):
-            # 10 daqiqa o'tganini tekshirish (test uchun buni 600 soniya qilib yozdik)
+            # 10 daqiqa (600 soniya) o'tgach eslatish
             if (now_uz - info["sent_time"]).total_seconds() > 600 and not info["reminded"]:
                 try:
-                    # Mijozga muloyim eslatma yuboramiz
-                    reminder_text = "Iltimos, uyingizning lokatsiyasini yuborishingizni kutyapmiz, kuryerimiz yo'lga chiqishga tayyor. 😊📍"
+                    reminder_text = (
+                        "Iltimos, ertangi tantana uchun joylashuv manzilini yuborishingizni kutyapmiz. "
+                        "Tasvirga olish jamoamiz o'z vaqtida yetib borishi uchun bu juda muhimdir. 😊🎬📍"
+                    )
                     await app.send_message(user_id, reminder_text)
                     
-                    info["reminded"] = True # eslatildi deb belgilaymiz
-                    await app.send_message(GROUP_ID, f"⏳ **Eslatma yuborildi:** Mijoz hali ham lokatsiya tashlamadi. Unga qayta eslatma xabari ketdi.", reply_to_message_id=info["msg_id"])
+                    info["reminded"] = True
+                    await app.send_message(GROUP_ID, f"⏳ **Eslatma yuborildi:** Mijoz hali ham lokatsiya tashlamadi. Unga qayta eslatma ketdi.", reply_to_message_id=info["msg_id"])
                 except Exception as e:
                     print(f"Eslatma yuborishda xato: {e}")
                     
-            # Agar xabar yuborilganiga 20 daqiqadan oshsa va javob bermasa, guruhni ogohlantiramiz
+            # Agar xabar yuborilganiga 20 daqiqa bo'lsa-yu javob bo'lmasa, guruhni ogohlantiramiz
             elif (now_uz - info["sent_time"]).total_seconds() > 1200:
                 await app.send_message(GROUP_ID, f"⚠️ **DIQQAT:** {info['phone']} raqamli mijoz yozganimizga 20 daqiqa bo'lsa ham javob bermadi!", reply_to_message_id=info["msg_id"])
-                # Ro'yxatdan o'chirib yuboramiz (kutish to'xtaydi)
                 del active_clients[user_id]
                 
         await asyncio.sleep(5)
