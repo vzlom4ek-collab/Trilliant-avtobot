@@ -39,22 +39,65 @@ app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESS
 pending_jobs = []   # Navbatdagi buyurtmalar
 active_clients = {} # Lokatsiya kutayotgan faol mijozlar
 
-# O'zbekcha yozilgan vaqtni aqlli aniqlash funksiyasi
+# Soat kichik bo'lsa uni kunduzgi vaqtga o'tkazish (masalan: 1 yarim -> 13:30)
+def adjust_hour(h):
+    if 1 <= h <= 7:
+        return h + 12
+    return h
+
+# O'zbekcha yozilgan vaqtni (har qanday formatda) juda aqlli aniqlash funksiyasi
 def parse_departure_time(text):
     text = text.lower().strip()
+    text = text.replace("’", "'").replace("`", "'").replace("‘", "'")
+
     # 1) Standard HH:MM formatini tekshirish (masalan: 12:30 yoki 13.00)
-    match = re.search(r'([0-1]?\d|2[0-3])[:.]([0-5]\d)', text)
-    if match:
-        h, m = int(match.group(1)), int(match.group(2))
+    match_std = re.search(r'\b([0-1]?\d|2[0-3])[:.]([0-5]\d)\b', text)
+    if match_std:
+        h, m = int(match_std.group(1)), int(match_std.group(2))
+        return adjust_hour(h), m
+
+    # 2) "yarim" (half past) so'zi borligini aniqlash
+    is_half = "yarim" in text or "ярим" in text or "ярум" in text
+    
+    # Lotin va Kirill tillarida sonlarni aniqlash qoidalari
+    def make_pattern(word_list):
+        words_alt = "|".join(word_list)
+        return r'\b(' + words_alt + r')(?:da|larda|ga|lar)?\b'
+
+    patterns = [
+        (make_pattern(["o'n ikki", "on ikki", "ўн икки"]), 12),
+        (make_pattern(["o'n bir", "on bir", "ўн бир"]), 11),
+        (make_pattern(["o'n", "on", "ўн"]), 10),
+        (make_pattern(["to'qqiz", "toqqiz", "тўққиз", "тоққиз"]), 9),
+        (make_pattern(["sakkiz", "саккиз"]), 8),
+        (make_pattern(["yetti", "etti", "етти"]), 7),
+        (make_pattern(["olti", "олти"]), 6),
+        (make_pattern(["besh", "беш"]), 5),
+        (make_pattern(["to'rt", "tort", "тўрт", "торт"]), 4),
+        (make_pattern(["uch", "уч"]), 3),
+        (make_pattern(["ikki", "икки"]), 2),
+        (make_pattern(["bir", "бир"]), 1),
+    ]
+
+    h = None
+    # So'z ko'rinishidagi soatlarni tekshiramiz
+    for pattern, val in patterns:
+        if re.search(pattern, text):
+            h = val
+            break
+
+    # Agar so'z topilmasa, raqamlarni tekshiramiz (masalan: 1 da, 2 yarimda)
+    if h is None:
+        digit_match = re.search(r'\b(\d{1,2})(?:da|larda|ga|lar)?\b', text)
+        if digit_match:
+            h = int(digit_match.group(1))
+
+    # Agar soat aniqlansa, vaqtni hisoblaymiz
+    if h is not None and 0 <= h <= 23:
+        h = adjust_hour(h)
+        m = 30 if is_half else 0
         return h, m
-    # 2) "soat 1 da", "2 larda", "13 da" kabi yakka soatlarni tekshirish
-    match_hour = re.search(r'(?:soat\s*)?(\d{1,2})\s*(?:da|larda|atrofida|atroflarida|gacha)?', text)
-    if match_hour:
-        h = int(match_hour.group(1))
-        # Agar soat 1 dan 6 gacha bo'lsa, uni tushdan keyingi vaqt (13:00 - 18:00) deb hisoblaymiz
-        if 1 <= h <= 6:
-            h += 12
-        return h, 0
+
     return None
 
 # 1. Navbatdagi buyurtmalar ro'yxatini ko'rish (/list)
@@ -89,7 +132,6 @@ async def cancel_job(client, message):
     reply_msg_id = message.reply_to_message.id
     canceled = False
     
-    # Kutilayotgan navbatdan o'chirish
     for job in pending_jobs[:]:
         if job["msg_id"] == reply_msg_id:
             pending_jobs.remove(job)
@@ -97,12 +139,11 @@ async def cancel_job(client, message):
             canceled = True
             break
             
-    # Lokatsiya kutilayotganlar ro'yxatidan o'chirish
     if not canceled:
         for user_id, info in list(active_clients.items()):
             if info["msg_id"] == reply_msg_id:
                 del active_clients[user_id]
-                await message.reply(f"🚫 **Kutilayotgan muloqot bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
+                await message.reply(f"🚫 **Kutilgan muloqot bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
                 canceled = True
                 break
                 
@@ -117,7 +158,6 @@ async def handle_group_message(client, message):
     if text.startswith("/"):
         return
         
-    # Xabar ichidan vaqt formatini (masalan, 01:17 yoki 15:30) qidirish
     time_match = re.search(r'([0-1]?\d|2[0-3]):([0-5]\d)', text)
     
     if time_match:
@@ -198,9 +238,8 @@ async def handle_location(client, message):
         )
         await message.reply(question)
         
-        # Holatni (State) kuyov vaqtini kutish rejimiga o'tkazamiz
         active_clients[user_id]["state"] = "waiting_time"
-        active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ) # taymerni yangilaymiz
+        active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ)
         active_clients[user_id]["reminded"] = False
 
 # 5. Private chatda mijoz vaqtni yozganda ishlov berish
@@ -226,8 +265,8 @@ async def handle_private_text(client, message):
             # Mijozga javob qaytarish
             reply_msg = (
                 f"Tushunarli, ma'lumot uchun rahmat! Unda tasvirga olish jamoamiz soat **{arr_str}** da yetib borishadi. 🎥\n\n"
-                f"Chunki syomkaga, kuyovni ijodiy rasm va videoga olishga hamda oilaviy rasmlarga "
-                f"1.5 - 2 soat vaqt to'liq yetadi. Ungacha jamoamiz barcha tayyorgarliklarni bemalol yakunlab olishadi. 😊✨"
+                f"Chunki ertangi ijodiy syomkaga, kuyovni rasm va videoga tasvirga olishga hamda oilaviy rasm-videolarga "
+                f"1.5 - 2 soat vaqt to'liq yetarli bo'ladi. Ungacha jamoamiz barcha tayyorgarliklarni bemalol yakunlab olishadi. 😊✨"
             )
             await message.reply(reply_msg)
             
@@ -241,15 +280,15 @@ async def handle_private_text(client, message):
             )
             await app.send_message(GROUP_ID, group_msg, reply_to_message_id=info["msg_id"])
             
-            # Mijozni faol ro'yxatdan o'chiramiz (barcha muloqot tugadi)
+            # Mijozni ro'yxatdan o'chiramiz
             del active_clients[user_id]
         else:
             await message.reply(
                 "Iltimos, vaqtni aniqroq formatda yozib yuboring.\n"
-                "Masalan: `12:00`, `soat 13:30 da` yoki `soat 1 da` kabi. 😊"
+                "Masalan: `12:00`, `soat 13:30 da`, `1 yarimda` yoki `soat 1 da` kabi. 😊"
             )
 
-# Har 5 soniyada vaqtni tekshirib turuvchi va eslatma beruvchi asosiy loop
+# Har 5 soniyada vaqtni tekshirib turuvchi va eslatma beruvchi loop
 async def scheduler_loop():
     while True:
         now_uz = datetime.now(UZB_TZ)
@@ -289,7 +328,7 @@ async def scheduler_loop():
                             "msg_id": msg_id,
                             "sent_time": now_uz,
                             "reminded": False,
-                            "state": "waiting_location" # dastlabki holat - lokatsiya kutish
+                            "state": "waiting_location"
                         }
                         await app.send_message(GROUP_ID, f"✉️ **Tabrik va taklif xabari yuborildi.** Lokatsiya kutilmoqda...", reply_to_message_id=msg_id)
                     else:
