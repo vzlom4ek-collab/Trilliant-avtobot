@@ -39,6 +39,24 @@ app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESS
 pending_jobs = []   # Navbatdagi buyurtmalar
 active_clients = {} # Lokatsiya kutayotgan faol mijozlar
 
+# O'zbekcha yozilgan vaqtni aqlli aniqlash funksiyasi
+def parse_departure_time(text):
+    text = text.lower().strip()
+    # 1) Standard HH:MM formatini tekshirish (masalan: 12:30 yoki 13.00)
+    match = re.search(r'([0-1]?\d|2[0-3])[:.]([0-5]\d)', text)
+    if match:
+        h, m = int(match.group(1)), int(match.group(2))
+        return h, m
+    # 2) "soat 1 da", "2 larda", "13 da" kabi yakka soatlarni tekshirish
+    match_hour = re.search(r'(?:soat\s*)?(\d{1,2})\s*(?:da|larda|atrofida|atroflarida|gacha)?', text)
+    if match_hour:
+        h = int(match_hour.group(1))
+        # Agar soat 1 dan 6 gacha bo'lsa, uni tushdan keyingi vaqt (13:00 - 18:00) deb hisoblaymiz
+        if 1 <= h <= 6:
+            h += 12
+        return h, 0
+    return None
+
 # 1. Navbatdagi buyurtmalar ro'yxatini ko'rish (/list)
 @app.on_message(filters.chat(GROUP_ID) & filters.command("list"))
 async def list_jobs(client, message):
@@ -54,9 +72,10 @@ async def list_jobs(client, message):
             text += f"{idx}. 📞 `{job['phone']}` — ⏰ {job['time'].strftime('%H:%M')} (UZB)\n"
             
     if active_clients:
-        text += "\n📬 **Lokatsiya kutilayotganlar (Xabar yuborilgan):**\n"
+        text += "\n📬 **Muloqot jarayonidagilar:**\n"
         for user_id, info in active_clients.items():
-            text += f"• 📞 `{info['phone']}` — ⏳ {info['sent_time'].strftime('%H:%M')} da yozildi\n"
+            state_desc = "Lokatsiya kutilmoqda" if info["state"] == "waiting_location" else "Kuyov chiqish vaqti kutilmoqda"
+            text += f"• 📞 `{info['phone']}` — 📊 `{state_desc}`\n"
             
     await message.reply(text)
 
@@ -83,12 +102,12 @@ async def cancel_job(client, message):
         for user_id, info in list(active_clients.items()):
             if info["msg_id"] == reply_msg_id:
                 del active_clients[user_id]
-                await message.reply(f"🚫 **Kutilayotgan lokatsiya bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
+                await message.reply(f"🚫 **Kutilayotgan muloqot bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
                 canceled = True
                 break
                 
     if not canceled:
-        await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon vaqti kelib bajarilgan.")
+        await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon bajarilgan.")
 
 # 3. Guruhdan yangi buyurtmalarni qabul qilish
 @app.on_message(filters.chat(GROUP_ID) & filters.text)
@@ -160,7 +179,7 @@ async def handle_group_message(client, message):
 @app.on_message(filters.private & filters.location)
 async def handle_location(client, message):
     user_id = message.from_user.id
-    if user_id in active_clients:
+    if user_id in active_clients and active_clients[user_id]["state"] == "waiting_location":
         info = active_clients[user_id]
         orig_msg_id = info["msg_id"]
         lat = message.location.latitude
@@ -171,8 +190,64 @@ async def handle_location(client, message):
         await app.send_message(GROUP_ID, info_text, reply_to_message_id=orig_msg_id)
         await app.send_location(GROUP_ID, lat, lon, reply_to_message_id=orig_msg_id)
         
-        await message.reply("Rahmat! Lokatsiyangiz qabul qilindi. 📍")
-        del active_clients[user_id]
+        # Mijozdan kuyovning uydan chiqish vaqtini so'raymiz
+        question = (
+            "Rahmat! Joylashuv manzili muvaffaqiyatli qabul qilindi. 📍\n\n"
+            "Sizdan yana bir juda muhim ma'lumotni bilmoqchi edik:\n"
+            "**Kuyov ertaga soat nechida uydan kelinnikiga yo'lga chiqadi (yuradi)?** ⏱️🤵"
+        )
+        await message.reply(question)
+        
+        # Holatni (State) kuyov vaqtini kutish rejimiga o'tkazamiz
+        active_clients[user_id]["state"] = "waiting_time"
+        active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ) # taymerni yangilaymiz
+        active_clients[user_id]["reminded"] = False
+
+# 5. Private chatda mijoz vaqtni yozganda ishlov berish
+@app.on_message(filters.private & filters.text)
+async def handle_private_text(client, message):
+    user_id = message.from_user.id
+    if user_id in active_clients and active_clients[user_id]["state"] == "waiting_time":
+        info = active_clients[user_id]
+        text = message.text.strip()
+        
+        parsed_time = parse_departure_time(text)
+        if parsed_time:
+            h, m = parsed_time
+            
+            # Kuyov chiqish vaqti
+            dep_dt = datetime.combine(datetime.today(), datetime.time(h, m))
+            # Jamoa boradigan vaqt (2 soat oldin)
+            arr_dt = dep_dt - timedelta(hours=2)
+            
+            dep_str = f"{h:02d}:{m:02d}"
+            arr_str = arr_dt.strftime("%H:%M")
+            
+            # Mijozga javob qaytarish
+            reply_msg = (
+                f"Tushunarli, ma'lumot uchun rahmat! Unda tasvirga olish jamoamiz soat **{arr_str}** da yetib borishadi. 🎥\n\n"
+                f"Chunki syomkaga, kuyovni ijodiy rasm va videoga olishga hamda oilaviy rasmlarga "
+                f"1.5 - 2 soat vaqt to'liq yetadi. Ungacha jamoamiz barcha tayyorgarliklarni bemalol yakunlab olishadi. 😊✨"
+            )
+            await message.reply(reply_msg)
+            
+            # Guruhga to'liq hisobotni yuborish
+            group_msg = (
+                f"ℹ️ **Mijoz bilan muloqot yakunlandi!**\n\n"
+                f"📞 **Telefon:** `{info['phone']}`\n"
+                f"⏱️ **Kuyov chiqish vaqti:** `{dep_str}`\n"
+                f"🎥 **Jamoa boradigan vaqt (2 soat oldin):** `{arr_str}`\n\n"
+                f"🤖 *Ushbu buyurtma bo'yicha barcha avtomatlashtirish muvaffaqiyatli bajarildi!*"
+            )
+            await app.send_message(GROUP_ID, group_msg, reply_to_message_id=info["msg_id"])
+            
+            # Mijozni faol ro'yxatdan o'chiramiz (barcha muloqot tugadi)
+            del active_clients[user_id]
+        else:
+            await message.reply(
+                "Iltimos, vaqtni aniqroq formatda yozib yuboring.\n"
+                "Masalan: `12:00`, `soat 13:30 da` yoki `soat 1 da` kabi. 😊"
+            )
 
 # Har 5 soniyada vaqtni tekshirib turuvchi va eslatma beruvchi asosiy loop
 async def scheduler_loop():
@@ -197,7 +272,6 @@ async def scheduler_loop():
                         user = contact.users[0]
                         user_id = user.id
                         
-                        # Agar shaxsiy yozuv bo'lsa shuni, bo'lmasa tayyor rasmiy tabrikni yuboramiz
                         if custom_text:
                             text = custom_text
                         else:
@@ -214,7 +288,8 @@ async def scheduler_loop():
                             "phone": phone,
                             "msg_id": msg_id,
                             "sent_time": now_uz,
-                            "reminded": False
+                            "reminded": False,
+                            "state": "waiting_location" # dastlabki holat - lokatsiya kutish
                         }
                         await app.send_message(GROUP_ID, f"✉️ **Tabrik va taklif xabari yuborildi.** Lokatsiya kutilmoqda...", reply_to_message_id=msg_id)
                     else:
@@ -224,25 +299,32 @@ async def scheduler_loop():
                 
                 pending_jobs.remove(job)
                 
-        # 2. Avtomatik eslatma tizimi (Mijoz yozgandan keyin 10 daqiqa o'tsa eslatish)
+        # 2. Avtomatik eslatma tizimi
         for user_id, info in list(active_clients.items()):
             # 10 daqiqa (600 soniya) o'tgach eslatish
             if (now_uz - info["sent_time"]).total_seconds() > 600 and not info["reminded"]:
                 try:
-                    reminder_text = (
-                        "Iltimos, ertangi tantana uchun joylashuv manzilini yuborishingizni kutyapmiz. "
-                        "Tasvirga olish jamoamiz o'z vaqtida yetib borishi uchun bu juda muhimdir. 😊🎬📍"
-                    )
+                    if info["state"] == "waiting_location":
+                        reminder_text = (
+                            "Iltimos, ertangi tantana uchun joylashuv manzilini yuborishingizni kutyapmiz. "
+                            "Tasvirga olish jamoamiz o'z vaqtida yetib borishi uchun bu juda muhimdir. 😊🎬📍"
+                        )
+                    else: # waiting_time
+                        reminder_text = (
+                            "Iltimos, kuyov uydan soat nechida chiqishini yozib yuborishingizni kutyapmiz. "
+                            "Ushbu ma'lumotga qarab ijodiy jamoamiz yetib borish vaqtini to'g'ri rejalashtiradi. 😊⏱️🤵"
+                        )
+                        
                     await app.send_message(user_id, reminder_text)
                     
                     info["reminded"] = True
-                    await app.send_message(GROUP_ID, f"⏳ **Eslatma yuborildi:** Mijoz hali ham lokatsiya tashlamadi. Unga qayta eslatma ketdi.", reply_to_message_id=info["msg_id"])
+                    await app.send_message(GROUP_ID, f"⏳ **Eslatma yuborildi:** Mijoz hali javob bermadi. Unga qayta eslatma ketdi.", reply_to_message_id=info["msg_id"])
                 except Exception as e:
                     print(f"Eslatma yuborishda xato: {e}")
                     
-            # Agar xabar yuborilganiga 20 daqiqa bo'lsa-yu javob bo'lmasa, guruhni ogohlantiramiz
+            # Agar muloqot boshlanganiga 20 daqiqa bo'lsa-yu javob bo'lmasa, guruhni ogohlantiramiz
             elif (now_uz - info["sent_time"]).total_seconds() > 1200:
-                await app.send_message(GROUP_ID, f"⚠️ **DIQQAT:** {info['phone']} raqamli mijoz yozganimizga 20 daqiqa bo'lsa ham javob bermadi!", reply_to_message_id=info["msg_id"])
+                await app.send_message(GROUP_ID, f"⚠️ **DIQQAT:** {info['phone']} raqamli mijoz yozganimizga 20 daqiqa bo'lsa ham javob bermadi! Kutish to'xtatildi.", reply_to_message_id=info["msg_id"])
                 del active_clients[user_id]
                 
         await asyncio.sleep(5)
