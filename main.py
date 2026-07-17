@@ -35,7 +35,8 @@ API_HASH = os.environ.get("API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING")
 GROUP_ID = int(os.environ.get("GROUP_ID"))  # Boshqaruv guruhi ID-si
 
-app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+# in_memory=True qo'shildi - Render'da SQLite qulflanishini oldini oladi
+app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, in_memory=True)
 
 # Xotirada saqlash
 pending_jobs = []   # Navbatdagi buyurtmalar
@@ -52,35 +53,28 @@ def parse_departure_time(text):
     text = text.lower().strip()
     text = text.replace("’", "'").replace("`", "'").replace("‘", "'")
 
-    # "yarim" (half past) so'zi borligini aniqlash
     is_half = any(word in text for word in ["yarim", "ярим", "ярум", "yarm", "yarym"])
 
-    # 1) Standard HH:MM formatini tekshirish (masalan: 12:30 yoki 13.00)
     match_std = re.search(r'\b([0-1]?\d|2[0-3])[:.]([0-5]\d)\b', text)
     if match_std:
         h, m = int(match_std.group(1)), int(match_std.group(2))
         return adjust_hour(h), m
 
-    # Lotin va Kirill tillarida so'zli soatlarni raqamga o'tkazish xaritasi
     word_to_num = {
         "bir": 1, "birda": 1, "бир": 1,
         "ikki": 2, "ikkida": 2, "икки": 2,
         "uch": 3, "uchda": 3, "уч": 3,
         "to'rt": 4, "tort": 4, "to'rtda": 4, "тўрт": 4, "торт": 4,
         "besh": 5, "beshda": 5, "беш": 5,
-        "olti": 6, "oltida": 6, "олти": 6,
-        "yetti": 7, "ettida": 7, "yettida": 7, "етти": 7,
+        "olti": 6, "oltida": 6, "олti": 6,
+        "yetti": 7, "ettida": 7, "етти": 7,
         "sakkiz": 8, "sakkizda": 8, "саккиз": 8,
-        "to'qqiz": 9, "toqqiz": 9, "to'qqizda": 9, "тўққиз": 9,
-        "o'n": 10, "on": 10, "o'nda": 10, "ўн": 10,
-        "o'n bir": 11, "on bir": 11, "o'n birda": 11, "ўн бир": 11,
-        "o'n ikki": 12, "on ikki": 12, "o'n ikkida": 12, "ўн икки": 12,
-        "o'n uch": 13, "on uch": 13, "ўн уч": 13,
-        "o'n to'rt": 14, "on tort": 14, "ўн тўрт": 14,
-        "o'n besh": 15, "on besh": 15, "ўн беш": 15
+        "to'qqiz": 9, "toqqiz": 9, "тўққиз": 9,
+        "o'n": 10, "on": 10, "ўн": 10,
+        "o'n bir": 11, "on bir": 11, "ўн бир": 11,
+        "o'n ikki": 12, "on ikki": 12, "ўн икки": 12
     }
 
-    # Matndagi so'zlarni ajratib olamiz
     words = re.findall(r"[a-zA-Z'ўўқхшчғўнъа-яА-Я]+", text)
     h = None
     for word in words:
@@ -88,13 +82,11 @@ def parse_departure_time(text):
             h = word_to_num[word]
             break
 
-    # Agar so'zli soat topilmasa, raqamlarni tekshiramiz (masalan: "soat 1 larda", "2 da")
     if h is None:
         digit_match = re.search(r'\b(\d{1,2})\b', text)
         if digit_match:
             h = int(digit_match.group(1))
 
-    # Agar soat aniqlansa, vaqtni hisoblaymiz
     if h is not None and 0 <= h <= 23:
         h = adjust_hour(h)
         m = 30 if is_half else 0
@@ -129,52 +121,58 @@ def transcribe_voice_hf(voice_file, hf_token):
 # 1. Navbatdagi buyurtmalar ro'yxatini ko'rish (/list)
 @app.on_message(filters.chat(GROUP_ID) & filters.command("list"))
 async def list_jobs(client, message):
-    if not pending_jobs and not active_clients:
-        await message.reply("📭 Hozircha navbatda hech qanday faol buyurtma yo'q.")
-        return
-    
-    text = "📋 **Hozirgi faol buyurtmalar ro'yxati:**\n\n"
-    
-    if pending_jobs:
-        text += "⏳ **Yuborilishi kutilayotganlar:**\n"
-        for idx, job in enumerate(pending_jobs, 1):
-            text += f"{idx}. 📞 `{job['phone']}` — ⏰ {job['time'].strftime('%H:%M')} (UZB)\n"
-            
-    if active_clients:
-        text += "\n📬 **Muloqot jarayonidagilar:**\n"
-        for user_id, info in active_clients.items():
-            state_desc = "Lokatsiya kutilmoqda" if info["state"] == "waiting_location" else "Kuyov chiqish vaqti kutilmoqda"
-            text += f"• 📞 `{info['phone']}` — 📊 `{state_desc}`\n"
-            
-    await message.reply(text)
+    try:
+        if not pending_jobs and not active_clients:
+            await message.reply("📭 Hozircha navbatda hech qanday faol buyurtma yo'q.")
+            return
+        
+        text = "📋 **Hozirgi faol buyurtmalar ro'yxati:**\n\n"
+        
+        if pending_jobs:
+            text += "⏳ **Yuborilishi kutilayotganlar:**\n"
+            for idx, job in enumerate(pending_jobs, 1):
+                text += f"{idx}. 📞 `{job['phone']}` — ⏰ {job['time'].strftime('%H:%M')} (UZB)\n"
+                
+        if active_clients:
+            text += "\n📬 **Muloqot jarayonidagilar:**\n"
+            for user_id, info in active_clients.items():
+                state_desc = "Lokatsiya kutilmoqda" if info["state"] == "waiting_location" else "Kuyov chiqish vaqti kutilmoqda"
+                text += f"• 📞 `{info['phone']}` — 📊 `{state_desc}`\n"
+                
+        await message.reply(text)
+    except Exception as e:
+        await message.reply(f"❌ Xatolik yuz berdi: {e}")
 
 # 2. Buyurtmani bekor qilish (/cancel)
 @app.on_message(filters.chat(GROUP_ID) & filters.command("cancel"))
 async def cancel_job(client, message):
-    if not message.reply_to_message:
-        await message.reply("❌ **Xatolik:** Bekor qilish uchun tizim qabul qilgan xabarga Reply (Javob) qilib yozing!")
-        return
-        
-    reply_msg_id = message.reply_to_message.id
-    canceled = False
-    
-    for job in pending_jobs[:]:
-        if job["msg_id"] == reply_msg_id:
-            pending_jobs.remove(job)
-            await message.reply(f"🚫 **Buyurtma bekor qilindi!**\n📞 Raqam: `{job['phone']}` navbatdan o'chirildi.")
-            canceled = True
-            break
+    try:
+        if not message.reply_to_message:
+            await message.reply("❌ **Xatolik:** Bekor qilish uchun tizim qabul qilgan xabarga Reply (Javob) qilib yozing!")
+            return
             
-    if not canceled:
-        for user_id, info in list(active_clients.items()):
-            if info["msg_id"] == reply_msg_id:
-                del active_clients[user_id]
-                await message.reply(f"🚫 **Kutilgan muloqot bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
+        reply_msg_id = message.reply_to_message.id
+        canceled = False
+        
+        for job in pending_jobs[:]:
+            if job["msg_id"] == reply_msg_id:
+                pending_jobs.remove(job)
+                await message.reply(f"🚫 **Buyurtma bekor qilindi!**\n📞 Raqam: `{job['phone']}` navbatdan o'chirildi.")
                 canceled = True
                 break
                 
-    if not canceled:
-        await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon bajarilgan.")
+        if not canceled:
+            for user_id, info in list(active_clients.items()):
+                if info["msg_id"] == reply_msg_id:
+                    del active_clients[user_id]
+                    await message.reply(f"🚫 **Kutilgan muloqot bekor qilindi!**\n📞 Raqam: `{info['phone']}`.")
+                    canceled = True
+                    break
+                    
+        if not canceled:
+            await message.reply("❌ Ushbu xabarga bog'liq faol buyurtma topilmadi yoki u allaqachon bajarilgan.")
+    except Exception as e:
+        await message.reply(f"❌ Xatolik: {e}")
 
 # 3. Guruhdan yangi buyurtmalarni qabul qilish
 @app.on_message(filters.chat(GROUP_ID) & filters.text)
@@ -184,11 +182,11 @@ async def handle_group_message(client, message):
     if text.startswith("/"):
         return
         
-    # Xabar ichidan telefon raqamini qidirish (9 tadan 12 tagacha raqamlar)
-    phone_match = re.search(r'(\+?\d{9,12})', text)
-    
-    if phone_match:
-        try:
+    # Guruhda raqam kiritilganda biron xato bo'lsa, uni guruhga yozish uchun try-except
+    try:
+        phone_match = re.search(r'(\+?\d{9,12})', text)
+        
+        if phone_match:
             phone_raw = phone_match.group(1)
             time_raw = text.replace(phone_raw, "").strip()
             
@@ -202,14 +200,13 @@ async def handle_group_message(client, message):
             if not phone.startswith("+"):
                 phone = "+" + phone
             
-            # Vaqtni bizning super-aqlli parserimiz orqali o'qish
             parsed_time = parse_departure_time(time_raw)
             
             if not parsed_time:
                 await message.reply(
                     f"❌ **Vaqtni aniqlab bo'lmadi!**\n"
                     f"Iltimos, vaqtni to'g'ri formatda yozing.\n"
-                    f"Misol: `{phone} 01:17` yoki `{phone} 1 yarimda` yoki `{phone} soat 2 larda` 😊"
+                    f"Misol: `{phone} 01:17` yoki `{phone} 1 yarimda` 😊"
                 )
                 return
                 
@@ -243,36 +240,37 @@ async def handle_group_message(client, message):
                 reply_text += f"\n✉️ **Shaxsiy xabar yuboriladi:** `{custom_text}`"
                 
             await message.reply(reply_text)
-            
-        except Exception as e:
-            await message.reply(f"❌ Xatolik yuz berdi: {e}")
+    except Exception as e:
+        await message.reply(f"❌ **Guruh xabarida ichki xatolik:** {e}")
 
 # 4. Private chatda lokatsiya kelganda uni guruhga yo'naltirish
 @app.on_message(filters.private & filters.location)
 async def handle_location(client, message):
-    user_id = message.from_user.id
-    if user_id in active_clients and active_clients[user_id]["state"] == "waiting_location":
-        info = active_clients[user_id]
-        orig_msg_id = info["msg_id"]
-        lat = message.location.latitude
-        lon = message.location.longitude
-        maps_link = f"https://www.google.com/maps?q={lat},{lon}"
-        
-        info_text = f"📍 **Mijozdan lokatsiya olindi!**\n\n📞 **Telefon:** `{info['phone']}`\n🗺️ **Google Maps:** {maps_link}"
-        await app.send_message(GROUP_ID, info_text, reply_to_message_id=orig_msg_id)
-        await app.send_location(GROUP_ID, lat, lon, reply_to_message_id=orig_msg_id)
-        
-        # Mijozdan kuyovning uydan chiqish vaqtini so'raymiz
-        question = (
-            "Rahmat! Joylashuv manzili muvaffaqiyatli qabul qilindi. 📍\n\n"
-            "Sizdan yana bir juda muhim ma'lumotni bilmoqchi edik:\n"
-            "**Kuyov ertaga soat nechida uydan kelinnikiga yo'lga chiqadi (yuradi)?** ⏱️🤵"
-        )
-        await message.reply(question)
-        
-        active_clients[user_id]["state"] = "waiting_time"
-        active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ)
-        active_clients[user_id]["reminded"] = False
+    try:
+        user_id = message.from_user.id
+        if user_id in active_clients and active_clients[user_id]["state"] == "waiting_location":
+            info = active_clients[user_id]
+            orig_msg_id = info["msg_id"]
+            lat = message.location.latitude
+            lon = message.location.longitude
+            maps_link = f"https://www.google.com/maps?q={lat},{lon}"
+            
+            info_text = f"📍 **Mijozdan lokatsiya olindi!**\n\n📞 **Telefon:** `{info['phone']}`\n🗺️ **Google Maps:** {maps_link}"
+            await app.send_message(GROUP_ID, info_text, reply_to_message_id=orig_msg_id)
+            await app.send_location(GROUP_ID, lat, lon, reply_to_message_id=orig_msg_id)
+            
+            question = (
+                "Rahmat! Joylashuv manzili muvaffaqiyatli qabul qilindi. 📍\n\n"
+                "Sizdan yana bir juda muhim ma'lumotni bilmoqchi edik:\n"
+                "**Kuyov ertaga soat nechida uydan kelinnikiga yo'lga chiqadi (yuradi)?** ⏱️🤵"
+            )
+            await message.reply(question)
+            
+            active_clients[user_id]["state"] = "waiting_time"
+            active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ)
+            active_clients[user_id]["reminded"] = False
+    except Exception as e:
+        print(f"Lokatsiya xatosi: {e}")
 
 # 5. Private chatda mijoz vaqtni yozganda yoki ovozli xabar yuborganda ishlov berish
 @app.on_message(filters.private & (filters.text | filters.voice))
@@ -282,24 +280,17 @@ async def handle_private_response(client, message):
         info = active_clients[user_id]
         
         text = ""
-        # Agar ovozli xabar kelsa, uni Hugging Face Whisper orqali translyatsiya qilamiz
         if message.voice:
             await app.send_message(GROUP_ID, f"🎙️ **Mijozdan ovozli xabar keldi.** Matnga aylantirilmoqda...", reply_to_message_id=info["msg_id"])
             
             hf_token = os.environ.get("HF_TOKEN")
             if not hf_token:
                 await message.reply("⚠️ Kechirasiz, ovozli xabarni qayta ishlash uchun serverda `HF_TOKEN` sozlanmagan. Iltimos, vaqtni yozma ravishda yuboring. ✍️")
-                await app.send_message(GROUP_ID, "❌ **Xatolik:** Render sozlamalarida `HF_TOKEN` kiritilmagani uchun ovozli xabarni o'qib bo'lmadi!", reply_to_message_id=info["msg_id"])
                 return
                 
             try:
-                # Ovozli faylni yuklab olamiz
                 voice_file = await message.download()
-                
-                # Whisper API ga yuboramiz
                 text = transcribe_voice_hf(voice_file, hf_token)
-                
-                # Faylni o'chirib yuboramiz
                 if os.path.exists(voice_file):
                     os.remove(voice_file)
                 
@@ -308,28 +299,21 @@ async def handle_private_response(client, message):
                     return
                 
                 await app.send_message(GROUP_ID, f"📝 **Ovozli xabar matni:**\n`\"{text}\"`", reply_to_message_id=info["msg_id"])
-                
             except Exception as e:
                 await message.reply("Kechirasiz, ovozli xabarni qayta ishlashda xatolik yuz berdi. Iltimos, vaqtni yozma ravishda yuboring. ✍️")
-                await app.send_message(GROUP_ID, f"❌ **Ovozli xabarni tarjima qilishda xato:** {e}", reply_to_message_id=info["msg_id"])
                 return
         else:
             text = message.text.strip()
         
-        # Aqlli parser yordamida har qanday yozilgan yoki ovozli matndan vaqtni aniqlaymiz
         parsed_time = parse_departure_time(text)
         if parsed_time:
             h, m = parsed_time
-            
-            # Kuyov chiqish vaqti
             dep_dt = datetime.combine(datetime.today(), datetime.time(h, m))
-            # Jamoa boradigan vaqt (2 soat oldin)
             arr_dt = dep_dt - timedelta(hours=2)
             
             dep_str = f"{h:02d}:{m:02d}"
             arr_str = arr_dt.strftime("%H:%M")
             
-            # Mijozga javob qaytarish
             reply_msg = (
                 f"Tushunarli, ma'lumot uchun rahmat! Unda tasvirga olish jamoamiz soat **{arr_str}** da yetib borishadi. 🎥\n\n"
                 f"Chunki ertangi ijodiy syomkaga, kuyovni rasm va videoga tasvirga olishga hamda oilaviy rasm-videolarga "
@@ -337,7 +321,6 @@ async def handle_private_response(client, message):
             )
             await message.reply(reply_msg)
             
-            # Guruhga to'liq hisobotni yuborish
             group_msg = (
                 f"ℹ️ **Mijoz bilan muloqot yakunlandi!**\n\n"
                 f"📞 **Telefon:** `{info['phone']}`\n"
@@ -346,8 +329,6 @@ async def handle_private_response(client, message):
                 f"🤖 *Ushbu buyurtma bo'yicha barcha avtomatlashtirish muvaffaqiyatli bajarildi!*"
             )
             await app.send_message(GROUP_ID, group_msg, reply_to_message_id=info["msg_id"])
-            
-            # Mijozni ro'yxatdan o'chiramiz
             del active_clients[user_id]
         else:
             await message.reply(
@@ -360,7 +341,6 @@ async def scheduler_loop():
     while True:
         now_uz = datetime.now(UZB_TZ)
         
-        # 1. Navbatdagi xabarlarni yuborish
         for job in pending_jobs[:]:
             if now_uz >= job["time"]:
                 phone = job["phone"]
@@ -405,7 +385,6 @@ async def scheduler_loop():
                 
                 pending_jobs.remove(job)
                 
-        # 2. Avtomatik eslatma tizimi
         for user_id, info in list(active_clients.items()):
             if (now_uz - info["sent_time"]).total_seconds() > 600 and not info["reminded"]:
                 try:
@@ -421,7 +400,6 @@ async def scheduler_loop():
                         )
                         
                     await app.send_message(user_id, reminder_text)
-                    
                     info["reminded"] = True
                     await app.send_message(GROUP_ID, f"⏳ **Eslatma yuborildi:** Mijoz hali javob bermadi. Unga qayta eslatma ketdi.", reply_to_message_id=info["msg_id"])
                 except Exception as e:
