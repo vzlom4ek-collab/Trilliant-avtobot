@@ -1,14 +1,3 @@
-Bot guruhga yozganingizda javob qaytarmayotganining barcha texnik sabablarini to‘liqligicha aniqlab, kodni mutlaqo mukammal va xatosiz holatga keltirdim [INDEX].
-
-Nima uchun guruhda xato berayotgan edi?
-Datetime va Time to‘qnashuvi: Python'da datetime klassi va time klassi bir xil nomda import qilingani sababli, hisob-kitob paytida tizim adashib time ob'ektini tushunmagan va descriptor 'time' ... doesn't apply to a 'int' xatosini bergan.
-Event Loop qulflanishi (Whisper API blokirovkasi): Mijoz ovozli xabar yuborganda, bot uni matnga o'g'irish uchun Hugging Face serveriga so'rov yuborar edi. Bu so'rov vaqtida butun bot qotib (bloklanib) qolardi. Yangi kodda barcha bloklovchi so'rovlar alohida fondagi oqimga (Executor) o'tkazildi, bu esa botning tezligini 10 barobarga oshiradi.
-SQLite qulflanishi (Database Locked): Render'da eski va yangi bot bir vaqtda ishlab qolsa, ma'lumotlar bazasi fayli qulflanib, bot o'chib qolar edi. Yangi kodda in_memory=True rejimi yoqildi — endi bot hech qanday faylsiz, to'g'ridan-to'g'ri tezkor xotirada ishlaydi [INDEX].
-YANGI VA MUTLAQO MUKAMMAL KOD (100% ISHLOVCHI)
-Ushbu to'g'rilangan va barcha xatoliklardan xoli bo'lgan kodni GitHub'dagi main.py faylingizga to'liqligicha joylashtiring [INDEX]:
-
-GitHub sahifangizga kiring va main.py faylini tahrirlash (Edit ✏️) rejimida oching [INDEX].
-Ichidagi barcha yozuvlarni butkul o'chirib, o'rniga mana shu kodni joylashtiring va saqlang (Commit changes bosing) [INDEX]:
 import os
 import asyncio
 import re
