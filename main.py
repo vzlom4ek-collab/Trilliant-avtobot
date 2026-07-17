@@ -1,6 +1,8 @@
 import os
 import asyncio
 import re
+import urllib.request
+import json
 from datetime import datetime, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import InputPhoneContact
@@ -50,45 +52,45 @@ def parse_departure_time(text):
     text = text.lower().strip()
     text = text.replace("’", "'").replace("`", "'").replace("‘", "'")
 
+    # "yarim" (half past) so'zi borligini aniqlash
+    is_half = any(word in text for word in ["yarim", "ярим", "ярум", "yarm", "yarym"])
+
     # 1) Standard HH:MM formatini tekshirish (masalan: 12:30 yoki 13.00)
     match_std = re.search(r'\b([0-1]?\d|2[0-3])[:.]([0-5]\d)\b', text)
     if match_std:
         h, m = int(match_std.group(1)), int(match_std.group(2))
         return adjust_hour(h), m
 
-    # 2) "yarim" (half past) so'zi borligini aniqlash
-    is_half = "yarim" in text or "ярим" in text or "ярум" in text
-    
-    # Lotin va Kirill tillarida sonlarni aniqlash qoidalari
-    def make_pattern(word_list):
-        words_alt = "|".join(word_list)
-        return r'\b(' + words_alt + r')(?:da|larda|ga|lar)?\b'
+    # Lotin va Kirill tillarida so'zli soatlarni raqamga o'tkazish xaritasi
+    word_to_num = {
+        "bir": 1, "birda": 1, "бир": 1,
+        "ikki": 2, "ikkida": 2, "икки": 2,
+        "uch": 3, "uchda": 3, "уч": 3,
+        "to'rt": 4, "tort": 4, "to'rtda": 4, "тўрт": 4, "торт": 4,
+        "besh": 5, "beshda": 5, "беш": 5,
+        "olti": 6, "oltida": 6, "олти": 6,
+        "yetti": 7, "ettida": 7, "yettida": 7, "етти": 7,
+        "sakkiz": 8, "sakkizda": 8, "саккиз": 8,
+        "to'qqiz": 9, "toqqiz": 9, "to'qqizda": 9, "тўққиз": 9,
+        "o'n": 10, "on": 10, "o'nda": 10, "ўн": 10,
+        "o'n bir": 11, "on bir": 11, "o'n birda": 11, "ўн бир": 11,
+        "o'n ikki": 12, "on ikki": 12, "o'n ikkida": 12, "ўн икки": 12,
+        "o'n uch": 13, "on uch": 13, "ўн уч": 13,
+        "o'n to'rt": 14, "on tort": 14, "ўн тўрт": 14,
+        "o'n besh": 15, "on besh": 15, "ўн беш": 15
+    }
 
-    patterns = [
-        (make_pattern(["o'n ikki", "on ikki", "ўн икки"]), 12),
-        (make_pattern(["o'n bir", "on bir", "ўн бир"]), 11),
-        (make_pattern(["o'n", "on", "ўн"]), 10),
-        (make_pattern(["to'qqiz", "toqqiz", "тўққиз", "тоққиз"]), 9),
-        (make_pattern(["sakkiz", "саккиз"]), 8),
-        (make_pattern(["yetti", "etti", "етти"]), 7),
-        (make_pattern(["olti", "олти"]), 6),
-        (make_pattern(["besh", "беш"]), 5),
-        (make_pattern(["to'rt", "tort", "тўрт", "торт"]), 4),
-        (make_pattern(["uch", "уч"]), 3),
-        (make_pattern(["ikki", "икки"]), 2),
-        (make_pattern(["bir", "бир"]), 1),
-    ]
-
+    # Matndagi so'zlarni ajratib olamiz
+    words = re.findall(r"[a-zA-Z'ўўқхшчғўнъа-яА-Я]+", text)
     h = None
-    # So'z ko'rinishidagi soatlarni tekshiramiz
-    for pattern, val in patterns:
-        if re.search(pattern, text):
-            h = val
+    for word in words:
+        if word in word_to_num:
+            h = word_to_num[word]
             break
 
-    # Agar so'z topilmasa, raqamlarni tekshiramiz (masalan: 1 da, 2 yarimda)
+    # Agar so'zli soat topilmasa, raqamlarni tekshiramiz (masalan: "soat 1 larda", "2 da")
     if h is None:
-        digit_match = re.search(r'\b(\d{1,2})(?:da|larda|ga|lar)?\b', text)
+        digit_match = re.search(r'\b(\d{1,2})\b', text)
         if digit_match:
             h = int(digit_match.group(1))
 
@@ -99,6 +101,31 @@ def parse_departure_time(text):
         return h, m
 
     return None
+
+# Hugging Face Whisper API orqali ovozli xabarni matnga o'girish
+def transcribe_voice_hf(voice_file, hf_token):
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    try:
+        with open(voice_file, "rb") as f:
+            data = f.read()
+        
+        req = urllib.request.Request(
+            API_URL,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "audio/ogg"
+            },
+            method="POST"
+        )
+        
+        # 15 soniya kutish limiti bilan so'rov yuboramiz
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_data = response.read().decode("utf-8")
+            return json.loads(res_data).get("text", "").strip()
+    except Exception as e:
+        print(f"Transcription error: {e}")
+        return None
 
 # 1. Navbatdagi buyurtmalar ro'yxatini ko'rish (/list)
 @app.on_message(filters.chat(GROUP_ID) & filters.command("list"))
@@ -158,32 +185,37 @@ async def handle_group_message(client, message):
     if text.startswith("/"):
         return
         
-    time_match = re.search(r'([0-1]?\d|2[0-3]):([0-5]\d)', text)
+    # Xabar ichidan telefon raqamini qidirish (9 tadan 12 tagacha raqamlar)
+    phone_match = re.search(r'(\+?\d{9,12})', text)
     
-    if time_match:
+    if phone_match:
         try:
-            time_raw = time_match.group(0)
+            phone_raw = phone_match.group(1)
+            time_raw = text.replace(phone_raw, "").strip()
             
             custom_text = None
-            if "|" in text:
-                parts = text.split("|")
+            if "|" in time_raw:
+                parts = time_raw.split("|")
+                time_raw = parts[0].strip()
                 custom_text = parts[1].strip()
-                phone_and_time = parts[0]
-            else:
-                phone_and_time = text
                 
-            phone_raw = phone_and_time.replace(time_raw, "").strip()
             phone = "".join(c for c in phone_raw if c.isdigit() or c == "+")
             if not phone.startswith("+"):
                 phone = "+" + phone
             
-            if len(phone) < 9:
-                await message.reply("❌ Telefon raqami noto'g'ri kiritildi!")
+            parsed_time = parse_departure_time(time_raw)
+            
+            if not parsed_time:
+                await message.reply(
+                    f"❌ **Vaqtni aniqlab bo'lmadi!**\n"
+                    f"Iltimos, vaqtni to'g'ri formatda yozing.\n"
+                    f"Misol: `{phone} 01:17` yoki `{phone} 1 yarimda` yoki `{phone} soat 2 larda` 😊"
+                )
                 return
                 
+            h, m = parsed_time
             now_uz = datetime.now(UZB_TZ)
-            schedule_time = datetime.strptime(time_raw, "%H:%M").time()
-            schedule_dt = datetime.combine(now_uz.date(), schedule_time).replace(tzinfo=UZB_TZ)
+            schedule_dt = datetime.combine(now_uz.date(), datetime.time(h, m)).replace(tzinfo=UZB_TZ)
             
             if now_uz >= schedule_dt:
                 if (now_uz - schedule_dt).total_seconds() > 1800:
@@ -242,14 +274,49 @@ async def handle_location(client, message):
         active_clients[user_id]["sent_time"] = datetime.now(UZB_TZ)
         active_clients[user_id]["reminded"] = False
 
-# 5. Private chatda mijoz vaqtni yozganda ishlov berish
-@app.on_message(filters.private & filters.text)
-async def handle_private_text(client, message):
+# 5. Private chatda mijoz vaqtni yozganda yoki ovozli xabar yuborganda ishlov berish
+@app.on_message(filters.private & (filters.text | filters.voice))
+async def handle_private_response(client, message):
     user_id = message.from_user.id
     if user_id in active_clients and active_clients[user_id]["state"] == "waiting_time":
         info = active_clients[user_id]
-        text = message.text.strip()
         
+        text = ""
+        # Agar ovozli xabar kelsa, uni Hugging Face Whisper orqali translyatsiya qilamiz
+        if message.voice:
+            await app.send_message(GROUP_ID, f"🎙️ **Mijozdan ovozli xabar keldi.** Matnga aylantirilmoqda...", reply_to_message_id=info["msg_id"])
+            
+            hf_token = os.environ.get("HF_TOKEN")
+            if not hf_token:
+                await message.reply("⚠️ Kechirasiz, ovozli xabarni qayta ishlash uchun serverda `HF_TOKEN` sozlanmagan. Iltimos, vaqtni yozma ravishda yuboring. ✍️")
+                await app.send_message(GROUP_ID, "❌ **Xatolik:** Render sozlamalarida `HF_TOKEN` kiritilmagani uchun ovozli xabarni o'qib bo'lmadi!", reply_to_message_id=info["msg_id"])
+                return
+                
+            try:
+                # Ovozli faylni yuklab olamiz
+                voice_file = await message.download()
+                
+                # Whisper API ga yuboramiz
+                text = transcribe_voice_hf(voice_file, hf_token)
+                
+                # Faylni o'chirib yuboramiz
+                if os.path.exists(voice_file):
+                    os.remove(voice_file)
+                
+                if not text:
+                    await message.reply("Kechirasiz, ovozingizni tushunib bo'lmadi. Iltimos, qaytadan aniqroq gapiring yoki yozma ravishda yuboring. 😊")
+                    return
+                
+                await app.send_message(GROUP_ID, f"📝 **Ovozli xabar matni:**\n`\"{text}\"`", reply_to_message_id=info["msg_id"])
+                
+            except Exception as e:
+                await message.reply("Kechirasiz, ovozli xabarni qayta ishlashda xatolik yuz berdi. Iltimos, vaqtni yozma ravishda yuboring. ✍️")
+                await app.send_message(GROUP_ID, f"❌ **Ovozli xabarni tarjima qilishda xato:** {e}", reply_to_message_id=info["msg_id"])
+                return
+        else:
+            text = message.text.strip()
+        
+        # Aqlli parser yordamida har qanday yozilgan yoki ovozli matndan vaqtni aniqlaymiz
         parsed_time = parse_departure_time(text)
         if parsed_time:
             h, m = parsed_time
@@ -274,7 +341,7 @@ async def handle_private_text(client, message):
             group_msg = (
                 f"ℹ️ **Mijoz bilan muloqot yakunlandi!**\n\n"
                 f"📞 **Telefon:** `{info['phone']}`\n"
-                f"⏱️ **Kuyov chiqish vaqti:** `{dep_str}`\n"
+                f"⏱️ **Kuyov chiqish vaqti:** `{dep_str}` (Mijoz xabari: *\"{text}\"*)\n"
                 f"🎥 **Jamoa boradigan vaqt (2 soat oldin):** `{arr_str}`\n\n"
                 f"🤖 *Ushbu buyurtma bo'yicha barcha avtomatlashtirish muvaffaqiyatli bajarildi!*"
             )
@@ -284,7 +351,7 @@ async def handle_private_text(client, message):
             del active_clients[user_id]
         else:
             await message.reply(
-                "Iltimos, vaqtni aniqroq formatda yozib yuboring.\n"
+                "Iltimos, vaqtni aniqroq formatda yozib yuboring yoki ovozli xabarda aniqroq ayting.\n"
                 "Masalan: `12:00`, `soat 13:30 da`, `1 yarimda` yoki `soat 1 da` kabi. 😊"
             )
 
@@ -361,7 +428,6 @@ async def scheduler_loop():
                 except Exception as e:
                     print(f"Eslatma yuborishda xato: {e}")
                     
-            # Agar muloqot boshlanganiga 20 daqiqa bo'lsa-yu javob bo'lmasa, guruhni ogohlantiramiz
             elif (now_uz - info["sent_time"]).total_seconds() > 1200:
                 await app.send_message(GROUP_ID, f"⚠️ **DIQQAT:** {info['phone']} raqamli mijoz yozganimizga 20 daqiqa bo'lsa ham javob bermadi! Kutish to'xtatildi.", reply_to_message_id=info["msg_id"])
                 del active_clients[user_id]
