@@ -1,134 +1,135 @@
 import os
-import json
 import asyncio
 from datetime import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 from pyrogram import Client, filters
 from pyrogram.types import InputPhoneContact
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ==================== DUMMY WEB SERVER (RENDER UCHUN) ====================
-# Render bot o'chib qolmasligi uchun uni kichik saytga aylantiramiz
 class SimpleWebServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Bot 24/7 faol ishlamoqda!")
-
     def log_message(self, format, *args):
-        return  # Loglar terminalni to'ldirib yubormasligi uchun
+        return
 
 def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), SimpleWebServer)
-    print(f"Veb-server port {port} da ishga tushdi.")
     server.serve_forever()
 
-# Serverni alohida oqimda (thread) ishga tushiramiz
 threading.Thread(target=start_web_server, daemon=True).start()
 # =========================================================================
 
-# 1. Muhit o'zgaruvchilarini o'qish
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING")
-GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDS_JSON")
-SHEET_NAME = os.environ.get("SHEET_NAME", "Mijozlar_Bazasi")
+GROUP_ID = int(os.environ.get("GROUP_ID"))  # Boshqaruv guruhi ID-si
 
-# 2. Google Sheets ulanishi
-creds_dict = json.loads(GOOGLE_CREDS_JSON)
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-gc = gspread.authorize(creds)
-sheet = gc.open(SHEET_NAME).sheet1
-
-# 3. Userbotni ishga tushirish
 app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+
+# Xotirada vaqtinchalik saqlash
+pending_jobs = []
 active_clients = {}
 
-def load_active_clients():
-    global active_clients
-    try:
-        rows = sheet.get_all_values()
-        active_clients.clear()
-        for idx, row in enumerate(rows[1:], start=2):
-            if len(row) >= 5:
-                status = row 2 
-                user_id = row 4 
-                if status == "Yuborildi" and user_id:
-                    active_clients[int(user_id)] = idx
-    except Exception as e:
-        print(f"Xatolik (aktiv mijozlarni yuklashda): {e}")
+# Guruhdan yangi buyurtmalarni qabul qilish
+@app.on_message(filters.chat(GROUP_ID) & filters.text)
+async def handle_group_message(client, message):
+    text = message.text.strip()
+    if "|" in text:
+        try:
+            parts = text.split("|")
+            phone_raw = parts[0].strip()
+            time_raw = parts[1].strip()
+            
+            # Telefon raqamini tozalash
+            phone = "".join(c for c in phone_raw if c.isdigit() or c == "+")
+            if not phone.startswith("+"):
+                phone = "+" + phone
+                
+            # Vaqtni o'qish
+            now = datetime.now()
+            try:
+                schedule_time = datetime.strptime(time_raw, "%H:%M").time()
+                schedule_dt = datetime.combine(now.date(), schedule_time)
+            except ValueError:
+                try:
+                    schedule_dt = datetime.strptime(time_raw, "%d.%m.%Y %H:%M")
+                except ValueError:
+                    await message.reply("❌ Vaqt formati xato! Misol: `+998901234567 | 19:30` yoki `+998901234567 | 17.07.2026 19:30`")
+                    return
+            
+            pending_jobs.append({
+                "phone": phone,
+                "time": schedule_dt,
+                "msg_id": message.id
+            })
+            
+            await message.reply(f"✅ Qabul qilindi!\n📞 Telefon: {phone}\n⏰ Vaqt: {schedule_dt.strftime('%d.%m.%Y %H:%M')}\nStatus: Kutilmoqda...")
+            print(f"Yangi buyurtma: {phone} | {schedule_dt}")
+            
+        except Exception as e:
+            await message.reply(f"❌ Xatolik yuz berdi: {e}")
 
+# Mijoz lokatsiya yuborganda uni guruhga yo'naltirish
 @app.on_message(filters.private & filters.location)
 async def handle_location(client, message):
     user_id = message.from_user.id
-    load_active_clients()
-    
     if user_id in active_clients:
-        row_num = active_clients[user_id]
+        orig_msg_id = active_clients[user_id]
         lat = message.location.latitude
         lon = message.location.longitude
         maps_link = f"https://www.google.com/maps?q={lat},{lon}"
         
-        sheet.update_cell(row_num, 4, maps_link)        # D ustun: Lokatsiya
-        sheet.update_cell(row_num, 3, "Lokatsiya olindi") # C ustun: Status
+        # Guruhga javob yozish
+        info_text = f"📍 Mijozdan lokatsiya olindi!\nGoogle Maps: {maps_link}"
+        await app.send_message(GROUP_ID, info_text, reply_to_message_id=orig_msg_id)
+        # Lokatsiyani o'zini ham guruhga yuborish
+        await app.send_location(GROUP_ID, lat, lon, reply_to_message_id=orig_msg_id)
         
-        await message.reply("Rahmat! Uyingiz lokatsiyasi qabul qilindi. 📍")
-        print(f"Lokatsiya olindi: {maps_link}")
+        await message.reply("Rahmat! Lokatsiyangiz qabul qilindi. 📍")
+        del active_clients[user_id]
 
-async def check_google_sheet():
+# Har 10 soniyada vaqtni tekshirib turuvchi reja
+async def scheduler_loop():
     while True:
-        try:
-            rows = sheet.get_all_values()
-            now = datetime.now()
-            
-            for idx, row in enumerate(rows[1:], start=2):
-                if len(row) < 3:
-                    continue
-                phone = row 0 
-                time_str = row 1 
-                status = row 2 
+        now = datetime.now()
+        for job in pending_jobs[:]:
+            if now >= job["time"]:
+                phone = job["phone"]
+                msg_id = job["msg_id"]
                 
-                if status == "Kutilmoqda":
-                    try:
-                        schedule_time = datetime.strptime(time_str, "%d.%m.%Y %H:%M")
-                    except ValueError:
-                        continue
+                await app.send_message(GROUP_ID, f"⚡ Vaqti keldi! {phone} raqamiga yozish boshlanmoqda...", reply_to_message_id=msg_id)
+                
+                try:
+                    contact = await app.import_contacts([
+                        InputPhoneContact(phone=phone, first_name=f"Mijoz {phone}")
+                    ])
                     
-                    if now >= schedule_time:
-                        try:
-                            contact = await app.import_contacts([
-                                InputPhoneContact(phone=phone, first_name=f"Mijoz {phone}")
-                            ])
-                            
-                            if contact.users:
-                                user = contact.users 0 
-                                user_id = user.id
-                                
-                                text = "Assalomu alaykum! Iltimos, uyingizning lokatsiyasini (geolokatsiya) yuboring."
-                                await app.send_message(user_id, text)
-                                
-                                sheet.update_cell(idx, 3, "Yuborildi")
-                                sheet.update_cell(idx, 5, str(user_id)) # E ustun: Telegram ID
-                                print(f"Xabar yuborildi: {phone}")
-                            else:
-                                sheet.update_cell(idx, 3, "Telegrami yo'q")
-                        except Exception as e:
-                            print(f"Xatolik: {e}")
-                            sheet.update_cell(idx, 3, "Xatolik yuz berdi")
-                            
-        except Exception as e:
-            print(f"Google Sheet xatoligi: {e}")
-            
-        await asyncio.sleep(60)
+                    if contact.users:
+                        user = contact.users[0]
+                        user_id = user.id
+                        
+                        text = "Assalomu alaykum! Iltimos, uyingizning lokatsiyasini (geolokatsiya) yuboring."
+                        await app.send_message(user_id, text)
+                        
+                        active_clients[user_id] = msg_id
+                        await app.send_message(GROUP_ID, f"✉️ Xabar yuborildi. Lokatsiya kutilmoqda...", reply_to_message_id=msg_id)
+                    else:
+                        await app.send_message(GROUP_ID, f"❌ Xatolik: {phone} raqamida Telegram topilmadi.", reply_to_message_id=msg_id)
+                except Exception as e:
+                    await app.send_message(GROUP_ID, f"❌ Xatolik yuz berdi: {e}", reply_to_message_id=msg_id)
+                
+                pending_jobs.remove(job)
+                
+        await asyncio.sleep(10)
 
 async def main():
     async with app:
-        await check_google_sheet()
+        await scheduler_loop()
 
 if __name__ == "__main__":
     app.run(main())
