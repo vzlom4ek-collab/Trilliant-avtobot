@@ -1,14 +1,3 @@
-Xatolik sababini aniqladim! Bu juda klassik va tushunarli Python xatoligi.
-
-Koddagi importlar bo'limida from datetime import datetime deb to'g'ridan-to'g'ri datetime klassini import qilganmiz. Keyinchalik esa kod ichida datetime.time(h, m) deb chaqirganimizda, Python buni adashtirib, klass xususiyati (descriptor) deb o'ylagan va xato bergan.
-
-Buni tuzatish juda oson! time klassini alohida import qilib, koddagi chaqiruvlarni time(h, m) deb to'g'rilab chiqdim.
-
-YANGILANGAN VA MUTLAQO XATOSIZ KOD
-Ushbu to'g'rilangan kodni GitHub'dagi main.py faylingizga to'liq joylashtiring:
-
-GitHub sahifangizga kiring va main.py faylini tahrirlash (Edit ✏️) rejimida oching.
-Ichidagi barcha kodlarni o'chirib, o'rniga mana shu yangilangan kodni joylashtiring va saqlang (Commit changes bosing):
 import os
 import asyncio
 import re
