@@ -119,7 +119,6 @@ def transcribe_voice_hf(voice_file, hf_token):
             method="POST"
         )
         
-        # 15 soniya kutish limiti bilan so'rov yuboramiz
         with urllib.request.urlopen(req, timeout=15) as response:
             res_data = response.read().decode("utf-8")
             return json.loads(res_data).get("text", "").strip()
@@ -203,6 +202,7 @@ async def handle_group_message(client, message):
             if not phone.startswith("+"):
                 phone = "+" + phone
             
+            # Vaqtni bizning super-aqlli parserimiz orqali o'qish
             parsed_time = parse_departure_time(time_raw)
             
             if not parsed_time:
@@ -407,7 +407,6 @@ async def scheduler_loop():
                 
         # 2. Avtomatik eslatma tizimi
         for user_id, info in list(active_clients.items()):
-            # 10 daqiqa (600 soniya) o'tgach eslatish
             if (now_uz - info["sent_time"]).total_seconds() > 600 and not info["reminded"]:
                 try:
                     if info["state"] == "waiting_location":
