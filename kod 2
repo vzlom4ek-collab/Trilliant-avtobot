@@ -6,22 +6,46 @@ import gspread
 from google.oauth2.service_account import Credentials
 from pyrogram import Client, filters
 from pyrogram.types import InputPhoneContact
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# 1. Koyeb muhitidan o'zgaruvchilarni o'qish
+# ==================== DUMMY WEB SERVER (RENDER UCHUN) ====================
+# Render bot o'chib qolmasligi uchun uni kichik saytga aylantiramiz
+class SimpleWebServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot 24/7 faol ishlamoqda!")
+
+    def log_message(self, format, *args):
+        return  # Loglar terminalni to'ldirib yubormasligi uchun
+
+def start_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleWebServer)
+    print(f"Veb-server port {port} da ishga tushdi.")
+    server.serve_forever()
+
+# Serverni alohida oqimda (thread) ishga tushiramiz
+threading.Thread(target=start_web_server, daemon=True).start()
+# =========================================================================
+
+# 1. Muhit o'zgaruvchilarini o'qish
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING")
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDS_JSON")
 SHEET_NAME = os.environ.get("SHEET_NAME", "Mijozlar_Bazasi")
 
-# 2. Google Sheets ulanishi (String formatidan JSONga o'tkazish)
+# 2. Google Sheets ulanishi
 creds_dict = json.loads(GOOGLE_CREDS_JSON)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
 gc = gspread.authorize(creds)
 sheet = gc.open(SHEET_NAME).sheet1
 
-# 3. Userbotni ishga tushirish (Session String orqali)
+# 3. Userbotni ishga tushirish
 app = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 active_clients = {}
 
@@ -32,8 +56,8 @@ def load_active_clients():
         active_clients.clear()
         for idx, row in enumerate(rows[1:], start=2):
             if len(row) >= 5:
-                status = row[2]
-                user_id = row[4]
+                status = row 2 
+                user_id = row 4 
                 if status == "Yuborildi" and user_id:
                     active_clients[int(user_id)] = idx
     except Exception as e:
@@ -50,12 +74,11 @@ async def handle_location(client, message):
         lon = message.location.longitude
         maps_link = f"https://www.google.com/maps?q={lat},{lon}"
         
-        # Google Sheetni yangilash
-        sheet.update_cell(row_num, 4, maps_link)        # D ustun: Lokatsiya linki
+        sheet.update_cell(row_num, 4, maps_link)        # D ustun: Lokatsiya
         sheet.update_cell(row_num, 3, "Lokatsiya olindi") # C ustun: Status
         
         await message.reply("Rahmat! Uyingiz lokatsiyasi qabul qilindi. 📍")
-        print(f"Lokatsiya olindi va bazaga yozildi: {maps_link}")
+        print(f"Lokatsiya olindi: {maps_link}")
 
 async def check_google_sheet():
     while True:
@@ -66,9 +89,9 @@ async def check_google_sheet():
             for idx, row in enumerate(rows[1:], start=2):
                 if len(row) < 3:
                     continue
-                phone = row[0]
-                time_str = row[1]
-                status = row[2]
+                phone = row 0 
+                time_str = row 1 
+                status = row 2 
                 
                 if status == "Kutilmoqda":
                     try:
@@ -78,33 +101,30 @@ async def check_google_sheet():
                     
                     if now >= schedule_time:
                         try:
-                            # Kontaktga qo'shish
                             contact = await app.import_contacts([
                                 InputPhoneContact(phone=phone, first_name=f"Mijoz {phone}")
                             ])
                             
                             if contact.users:
-                                user = contact.users[0]
+                                user = contact.users 0 
                                 user_id = user.id
                                 
-                                # Xabar yuborish
                                 text = "Assalomu alaykum! Iltimos, uyingizning lokatsiyasini (geolokatsiya) yuboring."
                                 await app.send_message(user_id, text)
                                 
-                                # Sheetni yangilash
                                 sheet.update_cell(idx, 3, "Yuborildi")
                                 sheet.update_cell(idx, 5, str(user_id)) # E ustun: Telegram ID
-                                print(f"Xabar muvaffaqiyatli yuborildi: {phone}")
+                                print(f"Xabar yuborildi: {phone}")
                             else:
                                 sheet.update_cell(idx, 3, "Telegrami yo'q")
                         except Exception as e:
-                            print(f"Kontakt yuklashda xato: {e}")
+                            print(f"Xatolik: {e}")
                             sheet.update_cell(idx, 3, "Xatolik yuz berdi")
                             
         except Exception as e:
-            print(f"Google Sheet bilan ishlashda xatolik: {e}")
+            print(f"Google Sheet xatoligi: {e}")
             
-        await asyncio.sleep(60) # Har 60 soniyada tekshirish
+        await asyncio.sleep(60)
 
 async def main():
     async with app:
