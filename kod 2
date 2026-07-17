@@ -42,8 +42,8 @@ async def handle_group_message(client, message):
     if "|" in text:
         try:
             parts = text.split("|")
-            phone_raw = parts[0].strip()
-            time_raw = parts[1].strip()
+            phone_raw = parts 0 .strip()
+            time_raw = parts 1 .strip()
             
             # Telefon raqamini tozalash
             phone = "".join(c for c in phone_raw if c.isdigit() or c == "+")
@@ -110,7 +110,7 @@ async def scheduler_loop():
                     ])
                     
                     if contact.users:
-                        user = contact.users[0]
+                        user = contact.users 0 
                         user_id = user.id
                         
                         text = "Assalomu alaykum! Iltimos, uyingizning lokatsiyasini (geolokatsiya) yuboring."
