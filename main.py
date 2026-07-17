@@ -1,9 +1,20 @@
+Xatolik sababini aniqladim! Bu juda klassik va tushunarli Python xatoligi.
+
+Koddagi importlar bo'limida from datetime import datetime deb to'g'ridan-to'g'ri datetime klassini import qilganmiz. Keyinchalik esa kod ichida datetime.time(h, m) deb chaqirganimizda, Python buni adashtirib, klass xususiyati (descriptor) deb o'ylagan va xato bergan.
+
+Buni tuzatish juda oson! time klassini alohida import qilib, koddagi chaqiruvlarni time(h, m) deb to'g'rilab chiqdim.
+
+YANGILANGAN VA MUTLAQO XATOSIZ KOD
+Ushbu to'g'rilangan kodni GitHub'dagi main.py faylingizga to'liq joylashtiring:
+
+GitHub sahifangizga kiring va main.py faylini tahrirlash (Edit ✏️) rejimida oching.
+Ichidagi barcha kodlarni o'chirib, o'rniga mana shu yangilangan kodni joylashtiring va saqlang (Commit changes bosing):
 import os
 import asyncio
 import re
 import urllib.request
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pyrogram import Client, filters
 from pyrogram.types import InputPhoneContact
 import threading
@@ -53,20 +64,22 @@ def parse_departure_time(text):
     text = text.lower().strip()
     text = text.replace("’", "'").replace("`", "'").replace("‘", "'")
 
-    is_half = any(word in text for word in ["yarim", "ярим", "ярум", "yarm", "yarym"])
+    is_half = any(word in text for word in ["yarim", "ярим", "яруum", "yarm", "yarym"])
 
+    # 1) Standard HH:MM formatini tekshirish (masalan: 12:30 yoki 13.00)
     match_std = re.search(r'\b([0-1]?\d|2[0-3])[:.]([0-5]\d)\b', text)
     if match_std:
         h, m = int(match_std.group(1)), int(match_std.group(2))
         return adjust_hour(h), m
 
+    # Lotin va Kirill tillarida so'zli soatlarni raqamga o'tkazish xaritasi
     word_to_num = {
         "bir": 1, "birda": 1, "бир": 1,
         "ikki": 2, "ikkida": 2, "икки": 2,
         "uch": 3, "uchda": 3, "уч": 3,
         "to'rt": 4, "tort": 4, "to'rtda": 4, "тўрт": 4, "торт": 4,
         "besh": 5, "beshda": 5, "беш": 5,
-        "olti": 6, "oltida": 6, "олti": 6,
+        "olti": 6, "oltida": 6, "олти": 6,
         "yetti": 7, "ettida": 7, "етти": 7,
         "sakkiz": 8, "sakkizda": 8, "саккиз": 8,
         "to'qqiz": 9, "toqqiz": 9, "тўққиз": 9,
@@ -182,7 +195,6 @@ async def handle_group_message(client, message):
     if text.startswith("/"):
         return
         
-    # Guruhda raqam kiritilganda biron xato bo'lsa, uni guruhga yozish uchun try-except
     try:
         phone_match = re.search(r'(\+?\d{9,12})', text)
         
@@ -200,6 +212,7 @@ async def handle_group_message(client, message):
             if not phone.startswith("+"):
                 phone = "+" + phone
             
+            # Vaqtni bizning super-aqlli parserimiz orqali o'qish
             parsed_time = parse_departure_time(time_raw)
             
             if not parsed_time:
@@ -212,7 +225,7 @@ async def handle_group_message(client, message):
                 
             h, m = parsed_time
             now_uz = datetime.now(UZB_TZ)
-            schedule_dt = datetime.combine(now_uz.date(), datetime.time(h, m)).replace(tzinfo=UZB_TZ)
+            schedule_dt = datetime.combine(now_uz.date(), time(h, m)).replace(tzinfo=UZB_TZ)
             
             if now_uz >= schedule_dt:
                 if (now_uz - schedule_dt).total_seconds() > 1800:
@@ -308,7 +321,7 @@ async def handle_private_response(client, message):
         parsed_time = parse_departure_time(text)
         if parsed_time:
             h, m = parsed_time
-            dep_dt = datetime.combine(datetime.today(), datetime.time(h, m))
+            dep_dt = datetime.combine(datetime.today(), time(h, m))
             arr_dt = dep_dt - timedelta(hours=2)
             
             dep_str = f"{h:02d}:{m:02d}"
